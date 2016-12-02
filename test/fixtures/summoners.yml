@@ -1,0 +1,13 @@
+# Read about fixtures at http://api.rubyonrails.org/classes/ActiveRecord/FixtureSet.html
+
+one:
+  username: MyString
+  stripped_username: MyString
+  region: MyString
+  user_id: MyString
+
+two:
+  username: MyString
+  stripped_username: MyString
+  region: MyString
+  user_id: MyString

@@ -1,0 +1,12 @@
+<h1>Main#lookup</h1>
+<p>Find me in app/views/main/lookup.html.erb</p>
+<p>Region: <%= @region %></p>
+<p>Username: <%= @username %></p>
+<p>Id: <%= @id.to_json %></p>
+<p>Summoners: <%= @summoners %></p>
+<p>Groups: <br/>
+  <% @groups.each do |current, duo| %>
+  <%= current.username %>: <%= duo %><br/>
+  <% end %>
+</p>
+<p>Errors: <%= @errors %></p>
