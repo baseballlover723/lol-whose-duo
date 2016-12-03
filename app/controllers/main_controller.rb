@@ -29,26 +29,28 @@ class MainController < ApplicationController
     @region = params.require(:region)
     @username = params.require(:username)
     @id = get_summoner_id @region, @username
+    @groups = {}
+    @number_of_games = {}
     return unless @errors.empty?
 
     current_game = get_current_game @region, @id
     return unless @errors.empty?
 
     @summoners = get_current_game_participants @region, current_game
-    ids = @summoners.map { |s| s.summoner_id }
-    @groups = {}
-    # ids.each do |id|
-    #   @groups[id] = Hash.new(0)
-    # end
+    team_1_ids = []
+    team_2_ids = []
+    current_game["participants"].each do |p|
+      team_1_ids << p["summonerId"].to_s if p["teamId"] == 100
+      team_2_ids << p["summonerId"].to_s if p["teamId"] == 200
+    end
     @summoners.each do |summoner|
       @groups[summoner] = Hash.new(0)
+      @number_of_games[summoner] = 0
     end
     @summoners.each do |summoner|
-      check_match_history(@region, summoner, ids.reject { |p| summoner.summoner_id == p })
+      other_ids = team_1_ids.include?(summoner.summoner_id) ? team_1_ids : team_2_ids
+      check_match_history(@region, summoner, other_ids.reject { |p| summoner.summoner_id == p })
     end
-    # else
-    #   @participants = current_game
-    # end
   end
 
   def get_key(region)
@@ -144,6 +146,7 @@ class MainController < ApplicationController
                                              rankedQueues: RANKED_QUEUES.join(",")
                                          }.to_query)
     json = HTTParty.get(match_history_uri)
+    @number_of_games[summoner] = json["endIndex"]
     if json.code != 200
       if retrys < 5
         puts "retrying match history #{{region: region, summoner: summoner.to_json}}"
@@ -198,3 +201,5 @@ class MainController < ApplicationController
     Game.create(game_id: id, summoners: summoners)
   end
 end
+#TODO use action cable
+# after action cable, check enemy team first

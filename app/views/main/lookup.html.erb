@@ -6,7 +6,7 @@
 <p>Summoners: <%= @summoners %></p>
 <p>Groups: <br/>
   <% @groups.each do |current, duo| %>
-  <%= current.username %>: <%= duo %><br/>
+      <%= current.username %>: <%= duo %> (<%= @number_of_games[current]%> of games)<br/>
   <% end %>
 </p>
 <p>Errors: <%= @errors %></p>
