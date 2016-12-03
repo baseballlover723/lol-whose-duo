@@ -6,7 +6,12 @@
 <p>Summoners: <%= @summoners %></p>
 <p>Groups: <br/>
   <% @groups.each do |current, duo| %>
-      <%= current.username %>: <%= duo %> (<%= @number_of_games[current]%> of games)<br/>
+      <%= current.username %> has played with :
+      <% duo.each do |summoner, number_of_matches| %>
+          {<%= summoner.username %>: <%= number_of_matches %> / <%= @number_of_games[current] %> matches
+          (<%= (100 * number_of_matches / @number_of_games[current].to_f).round(0) %>)%},
+      <% end %>
+      (looked at the last <%= @number_of_games[current] %> ranked games)<br/>
   <% end %>
 </p>
 <p>Errors: <%= @errors %></p>
