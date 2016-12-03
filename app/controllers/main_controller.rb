@@ -125,8 +125,8 @@ class MainController < ApplicationController
   def check_match_history(region, summoner, others, retrys = 0)
     puts "#{summoner.summoner_id}: #{others}"
     matches = get_match_history(region, summoner)
-    return unless @errors.empty?
-
+    return unless @errors.empty? && matches["endIndex"] != 0
+    old_matches = matches
     matches = matches["matches"]
     puts "looking up matches: #{matches.map { |m| m["matchId"] }}"
     matches.each do |match|

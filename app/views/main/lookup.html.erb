@@ -5,7 +5,10 @@
 <p>Id: <%= @id.to_json %></p>
 <p>Summoners: <%= @summoners %></p>
 <p>Groups: <br/>
-  <% @groups.each do |current, duo| %>
+  <% @groups.each_with_index do |(current, duo), index| %>
+      <% if index == 5 %>
+          <br/>
+      <% end %>
       <%= current.username %> has played with :
       <% duo.each do |summoner, number_of_matches| %>
           {<%= summoner.username %>: <%= number_of_matches %> / <%= @number_of_games[current] %> matches
