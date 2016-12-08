@@ -3,8 +3,9 @@ NUMBER_OF_HISTORY_GAMES = ENV["NUMBER_OF_HISTORY_GAMES"].to_i
 NUMBER_OF_DUPLICATE_KEYS = ENV["NUMBER_OF_DUPLICATE_KEYS"].to_i
 REGION_TRANSLATOR = {br: "BR1", eune: "EUN1", euw: "EUW1", jp: "JP1", kr: "KR", lan: "LA1", las: "LA2",
                      na: "NA1", oce: "OC1", ru: "RU", tr: "TR1"}.with_indifferent_access
-RANKED_QUEUES = ["RANKED_FLEX_SR", "RANKED_SOLO_5x5", "RANKED_TEAM_3x3", "RANKED_TEAM_5x5", "TEAM_BUILDER_DRAFT_RANKED_5x5", "TEAM_BUILDER_RANKED_SOLO"]
+RANKED_QUEUES = ["RANKED_FLEX_SR", "RANKED_SOLO_5x5", "RANKED_TEAM_5x5", "TEAM_BUILDER_DRAFT_RANKED_5x5", "TEAM_BUILDER_RANKED_SOLO"]
 KEY_SLEEP_TIME = (1.5 * NUMBER_OF_DUPLICATE_KEYS).seconds
+RETRY_SLEEP_TIME = 0.5
 KEYS = {}.with_indifferent_access
 REGION_TRANSLATOR.each_key do |region|
   region_queue = Queue.new
@@ -115,9 +116,16 @@ class MainController < ApplicationController
   def get_current_game_participants(region, game)
     summoners = []
     game["participants"].each do |participant|
-      summoners << Summoner.find_or_create_by(username: participant["summonerName"],
-                                              stripped_username: participant["summonerName"].gsub(/\s+/, "").downcase,
-                                              region: region, summoner_id: participant["summonerId"])
+      summoner = Summoner.where(summoner_id: participant["summonerId"])[0]
+      if summoner
+        summoner.update(username: participant["summonerName"],
+                        stripped_username: participant["summonerName"].gsub(/\s+/, "").downcase)
+        summoners << summoner
+      else
+        summoners << Summoner.create(username: participant["summonerName"],
+                                     stripped_username: participant["summonerName"].gsub(/\s+/, "").downcase,
+                                     region: region, summoner_id: participant["summonerId"])
+      end
     end
     summoners
   end
@@ -125,34 +133,35 @@ class MainController < ApplicationController
   def check_match_history(region, summoner, others, retrys = 0)
     puts "#{summoner.summoner_id}: #{others}"
     matches = get_match_history(region, summoner)
-    return unless @errors.empty? && matches["endIndex"] != 0
+    # return unless @errors.empty? && matches["endIndex"] != 0
+    return if matches.code != 200 || matches["endIndex"] == 0
     old_matches = matches
     matches = matches["matches"]
     puts "looking up matches: #{matches.map { |m| m["matchId"] }}"
-    matches.each do |match|
-      lookup_match(region, match["matchId"], summoner, others)
-    end
+    lookup_matches(region, matches, summoner, others)
   end
 
   def get_match_history(region, summoner, retrys = 0)
     match_history_path1 = "/api/lol/"
     match_history_path2 = "/v2.2/matchlist/by-summoner/"
+    key = get_key(region)
     match_history_uri = URI::HTTPS.build(host: region + REQUEST_BASE,
                                          path: match_history_path1 + region + match_history_path2 + summoner.summoner_id,
                                          query: {
-                                             api_key: get_key(region),
+                                             api_key: key,
                                              beginIndex: 0,
                                              endIndex: NUMBER_OF_HISTORY_GAMES,
                                              rankedQueues: RANKED_QUEUES.join(",")
                                          }.to_query)
     json = HTTParty.get(match_history_uri)
-    @number_of_games[summoner] = json["endIndex"]
     if json.code != 200
-      if retrys < 5
+      if retrys < 7
         puts "retrying match history #{{region: region, summoner: summoner.to_json}}"
+        sleep(RETRY_SLEEP_TIME * retrys)
         return get_match_history(region, summoner, retrys + 1)
       else
         puts "get match history failed: #{{region: region, summoner: summoner.to_json}}"
+        puts({json: json, key: key})
         @errors << "error getting match history for summoner '#{summoner.username}'"
         return json
       end
@@ -160,12 +169,34 @@ class MainController < ApplicationController
     json
   end
 
+  def lookup_matches(region, matches_json, summoner, others)
+    match_ids = matches_json.map { |m| m["matchId"] }
+    cached_matches = Game.includes(:summoners).where(game_id: match_ids)
+    cached_matches.each do |match|
+      calculate_match(match, summoner, others)
+    end
+    match_ids -= cached_matches.map { |m| m.game_id.to_i }
+    match_ids.each do |match_id|
+      lookup_match(region, match_id, summoner, others)
+    end
+  end
+
   def lookup_match(region, id, summoner, other_summoner_ids)
     puts "looking up match: #{id}"
-    match = Game.exists?(game_id: id) ? Game.find_by_game_id(id) : get_match(region, id)
-    return unless @errors.empty?
+    match = Game.exists?(game_id: id) ? Game.includes(:summoners).find(game_id: id) : get_match(region, id)
+    return unless @errors.empty? && match
+    calculate_match(match, summoner, other_summoner_ids)
+  end
+
+  def calculate_match(match, summoner, other_summoner_ids)
+    @number_of_games[summoner] += 1
     match.summoners.each do |match_summoner|
-       @groups[summoner][match_summoner] += 1 if other_summoner_ids.include?(match_summoner.summoner_id)
+      @groups[summoner][match_summoner] += 1 if other_summoner_ids.include?(match_summoner.summoner_id)
+    end
+    if match.summoners.count != 10
+      @errors << {message: "bad match not right number of summoners",
+                  summoners_count: match.summoners.count,
+                  match: match}
     end
   end
 
@@ -176,19 +207,21 @@ class MainController < ApplicationController
     end
     match_path1 = "/api/lol/"
     match_path2 = "/v2.2/match/"
+    key = get_key(region)
     match_uri = URI::HTTPS.build(host: region + REQUEST_BASE,
                                  path: match_path1 + region + match_path2 + id.to_s,
-                                 query: {api_key: get_key(region)}.to_query)
+                                 query: {api_key: key}.to_query)
     json = HTTParty.get(match_uri)
     if json.code != 200
-      if retrys < 5
+      if retrys < 3
         puts "retrying match #{{region: region, id: id}}"
+        sleep(RETRY_SLEEP_TIME * retrys)
         return get_match(region, id, retrys + 1)
       else
         puts "get match failed: #{{region: region, id: id}}"
-        @errors << "There was an error retreiving match data"
-        puts "error: #{json}"
-        return json
+        puts({json: json, key: key})
+        @errors << "There was an error retreiving match data {id: #{id}}"
+        return false
       end
     end
     summoners = []
@@ -198,8 +231,14 @@ class MainController < ApplicationController
                                               stripped_username: participant["summonerName"].gsub(/\s+/, "").downcase,
                                               region: region, summoner_id: participant["summonerId"])
     end
+    if summoners.count != 10
+      @errors << {message: "bad match not right number of summoners",
+                  summoners_count: summoners.count,
+                  match: json["participantIdentities"]}
+    end
     Game.create(game_id: id, summoners: summoners)
   end
 end
 #TODO use action cable
 # after action cable, check enemy team first
+# TODO create get matches to take advantage of db
