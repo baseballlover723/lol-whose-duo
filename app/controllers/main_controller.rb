@@ -3,8 +3,8 @@ NUMBER_OF_HISTORY_GAMES = ENV["NUMBER_OF_HISTORY_GAMES"].to_i
 NUMBER_OF_DUPLICATE_KEYS = ENV["NUMBER_OF_DUPLICATE_KEYS"].to_i
 REGION_TRANSLATOR = {br: "BR1", eune: "EUN1", euw: "EUW1", jp: "JP1", kr: "KR", lan: "LA1", las: "LA2",
                      na: "NA1", oce: "OC1", ru: "RU", tr: "TR1"}.with_indifferent_access
-RANKED_QUEUES = ["RANKED_FLEX_SR", "RANKED_SOLO_5x5", "RANKED_TEAM_5x5", "TEAM_BUILDER_DRAFT_RANKED_5x5", "TEAM_BUILDER_RANKED_SOLO"]
-KEY_SLEEP_TIME = (1.5 * NUMBER_OF_DUPLICATE_KEYS).seconds
+RANKED_QUEUES = ["RANKED_FLEX_SR", "RANKED_SOLO_5x5", "RANKED_TEAM_3x3", "RANKED_TEAM_5x5", "TEAM_BUILDER_DRAFT_RANKED_5x5", "TEAM_BUILDER_RANKED_SOLO"]
+KEY_SLEEP_TIME = (2 * NUMBER_OF_DUPLICATE_KEYS).seconds
 RETRY_SLEEP_TIME = 0.5
 KEYS = {}.with_indifferent_access
 REGION_TRANSLATOR.each_key do |region|
@@ -184,7 +184,7 @@ class MainController < ApplicationController
   def lookup_match(region, id, summoner, other_summoner_ids)
     puts "looking up match: #{id}"
     match = Game.exists?(game_id: id) ? Game.includes(:summoners).find(game_id: id) : get_match(region, id)
-    return unless @errors.empty? && match
+    return unless match
     calculate_match(match, summoner, other_summoner_ids)
   end
 
@@ -193,7 +193,7 @@ class MainController < ApplicationController
     match.summoners.each do |match_summoner|
       @groups[summoner][match_summoner] += 1 if other_summoner_ids.include?(match_summoner.summoner_id)
     end
-    if match.summoners.count != 10
+    unless match.summoners.count == 10 || match.summoners.count == 6
       @errors << {message: "bad match not right number of summoners",
                   summoners_count: match.summoners.count,
                   match: match}
@@ -231,7 +231,7 @@ class MainController < ApplicationController
                                               stripped_username: participant["summonerName"].gsub(/\s+/, "").downcase,
                                               region: region, summoner_id: participant["summonerId"])
     end
-    if summoners.count != 10
+    unless summoners.count == 10 || summoners.count == 6
       @errors << {message: "bad match not right number of summoners",
                   summoners_count: summoners.count,
                   match: json["participantIdentities"]}

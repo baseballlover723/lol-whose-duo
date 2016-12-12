@@ -6,7 +6,7 @@
 <p>Summoners: <%= @summoners %></p>
 <p>Groups: <br/>
   <% @groups.each_with_index do |(current, duo), index| %>
-      <% if index == 5 %>
+      <% if index == @groups.size / 2 %>
           <br/>
       <% end %>
       <%= current.username %> has played with :
