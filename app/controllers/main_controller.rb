@@ -37,6 +37,16 @@ class MainController < ApplicationController
     current_game = get_current_game @region, @id
     return unless @errors.empty?
 
+    gon.id = @id.summoner_id
+    Thread.new do
+      sleep 2
+      puts "send to client"
+      ActionCable.server.broadcast(
+          @id.summoner_id.to_s,
+          sent_by: 'Paul',
+          body: 'This is a cool chat app.'
+      )
+    end
     @summoners = get_current_game_participants @region, current_game
     team_1_ids = []
     team_2_ids = []
