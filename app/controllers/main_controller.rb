@@ -34,19 +34,21 @@ class MainController < ApplicationController
     @number_of_games = {}
     return unless @errors.empty?
 
+    gon.id = @id.summoner_id
+    # Thread.new do
+    #   sleep 2
+    #   puts "send to client"
+    #   game = @id.games.first
+    #   ActionCable.server.broadcast(
+    #       @id.summoner_id.to_s,
+    #       summoner: @id,
+    #       game: game,
+    #       summoners: game.summoners
+    #   )
+    # end
     current_game = get_current_game @region, @id
     return unless @errors.empty?
 
-    gon.id = @id.summoner_id
-    Thread.new do
-      sleep 2
-      puts "send to client"
-      ActionCable.server.broadcast(
-          @id.summoner_id.to_s,
-          sent_by: 'Paul',
-          body: 'This is a cool chat app.'
-      )
-    end
     @summoners = get_current_game_participants @region, current_game
     team_1_ids = []
     team_2_ids = []
@@ -237,9 +239,19 @@ class MainController < ApplicationController
     summoners = []
     json["participantIdentities"].each do |participant|
       participant = participant["player"]
-      summoners << Summoner.find_or_create_by(username: participant["summonerName"],
-                                              stripped_username: participant["summonerName"].gsub(/\s+/, "").downcase,
-                                              region: region, summoner_id: participant["summonerId"])
+      summoner = Summoner.where(summoner_id: participant["summonerId"])[0]
+      if summoner
+        summoner.update(username: participant["summonerName"],
+                        stripped_username: participant["summonerName"].gsub(/\s+/, "").downcase)
+        summoners << summoner
+      else
+        summoners << Summoner.create(username: participant["summonerName"],
+                                     stripped_username: participant["summonerName"].gsub(/\s+/, "").downcase,
+                                     region: region, summoner_id: participant["summonerId"])
+      end
+      # summoners << Summoner.find_or_create_by(username: participant["summonerName"],
+      #                                         stripped_username: participant["summonerName"].gsub(/\s+/, "").downcase,
+      #                                         region: region, summoner_id: participant["summonerId"])
     end
     unless summoners.count == 10 || summoners.count == 6
       @errors << {message: "bad match not right number of summoners",
