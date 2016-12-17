@@ -1,6 +1,7 @@
 var matches = {};
 var groups = [];
-if (gon.id) {
+var cable = false;
+if (gon.id && cable) {
     App.main = App.cable.subscriptions.create({channel: "MainChannel", room: gon.id}, {
         connected: function () {
             console.log("connected");
