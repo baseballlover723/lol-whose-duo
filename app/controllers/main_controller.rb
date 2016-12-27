@@ -120,7 +120,7 @@ class MainController < ApplicationController
     unless Game.exists?(game_id: json["gameId"])
       puts "new current game"
       summoners = get_current_game_participants region, json
-      Game.create(game_id: json["gameId"], summoners: summoners)
+      Game.my_create(game_id: json["gameId"], summoners: summoners)
     end
     json
   end
@@ -183,7 +183,8 @@ class MainController < ApplicationController
 
   def lookup_matches(region, matches_json, summoner, others)
     match_ids = matches_json.map { |m| m["matchId"] }
-    cached_matches = Game.includes(:summoners).where(game_id: match_ids)
+    # cached_matches = Game.includes(:summoners).where(game_id: match_ids)
+    cached_matches = Game.include_summoners.where(game_id: match_ids)
     cached_matches.each do |match|
       calculate_match(match, summoner, others)
     end
@@ -195,7 +196,7 @@ class MainController < ApplicationController
 
   def lookup_match(region, id, summoner, other_summoner_ids)
     puts "looking up match: #{id}"
-    match = Game.exists?(game_id: id) ? Game.includes(:summoners).find(game_id: id) : get_match(region, id)
+    match = Game.exists?(game_id: id) ? Game.include_summoners.find(game_id: id) : get_match(region, id)
     return unless match
     calculate_match(match, summoner, other_summoner_ids)
   end
@@ -258,7 +259,7 @@ class MainController < ApplicationController
                   summoners_count: summoners.count,
                   match: json["participantIdentities"]}
     end
-    Game.create(game_id: id, summoners: summoners)
+    Game.my_create(game_id: id, summoners: summoners)
   end
 end
 #TODO use action cable

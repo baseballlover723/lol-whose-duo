@@ -17,13 +17,28 @@ ActiveRecord::Schema.define(version: 20161129171229) do
 
   create_table "games", force: :cascade do |t|
     t.string   "game_id"
+    t.integer  "s1_id"
+    t.integer  "s2_id"
+    t.integer  "s3_id"
+    t.integer  "s4_id"
+    t.integer  "s5_id"
+    t.integer  "s6_id"
+    t.integer  "s7_id"
+    t.integer  "s8_id"
+    t.integer  "s9_id"
+    t.integer  "s10_id"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
-  end
-
-  create_table "games_summoners", id: false, force: :cascade do |t|
-    t.integer "game_id",     null: false
-    t.integer "summoner_id", null: false
+    t.index ["s10_id"], name: "index_games_on_s10_id", using: :btree
+    t.index ["s1_id"], name: "index_games_on_s1_id", using: :btree
+    t.index ["s2_id"], name: "index_games_on_s2_id", using: :btree
+    t.index ["s3_id"], name: "index_games_on_s3_id", using: :btree
+    t.index ["s4_id"], name: "index_games_on_s4_id", using: :btree
+    t.index ["s5_id"], name: "index_games_on_s5_id", using: :btree
+    t.index ["s6_id"], name: "index_games_on_s6_id", using: :btree
+    t.index ["s7_id"], name: "index_games_on_s7_id", using: :btree
+    t.index ["s8_id"], name: "index_games_on_s8_id", using: :btree
+    t.index ["s9_id"], name: "index_games_on_s9_id", using: :btree
   end
 
   create_table "summoners", force: :cascade do |t|
