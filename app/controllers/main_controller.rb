@@ -4,7 +4,7 @@ NUMBER_OF_DUPLICATE_KEYS = ENV["NUMBER_OF_DUPLICATE_KEYS"].to_i
 REGION_TRANSLATOR = {br: "BR1", eune: "EUN1", euw: "EUW1", jp: "JP1", kr: "KR", lan: "LA1", las: "LA2",
                      na: "NA1", oce: "OC1", ru: "RU", tr: "TR1"}.with_indifferent_access
 RANKED_QUEUES = ["RANKED_FLEX_SR", "RANKED_SOLO_5x5", "RANKED_TEAM_3x3", "RANKED_TEAM_5x5", "TEAM_BUILDER_DRAFT_RANKED_5x5", "TEAM_BUILDER_RANKED_SOLO"]
-KEY_SLEEP_TIME = (2 * NUMBER_OF_DUPLICATE_KEYS).seconds
+KEY_SLEEP_TIME = (1.4 * NUMBER_OF_DUPLICATE_KEYS).seconds
 RETRY_SLEEP_TIME = 0.5
 KEYS = {}.with_indifferent_access
 REGION_TRANSLATOR.each_key do |region|
@@ -26,6 +26,7 @@ class MainController < ApplicationController
   end
 
   def lookup
+    @threads = []
     @errors = []
     @region = params.require(:region)
     @username = params.require(:username)
@@ -64,6 +65,7 @@ class MainController < ApplicationController
       other_ids = team_1_ids.include?(summoner.summoner_id) ? team_1_ids : team_2_ids
       check_match_history(@region, summoner, other_ids.reject { |p| summoner.summoner_id == p })
     end
+    @threads.each(&:join)
   end
 
   def get_key(region)
@@ -183,7 +185,10 @@ class MainController < ApplicationController
 
   def lookup_matches(region, matches_json, summoner, others)
     match_ids = matches_json.map { |m| m["matchId"] }
-    cached_matches = Game.includes(:summoners).where(game_id: match_ids)
+    cached_matches = nil
+    ActiveRecord::Base.connection_pool.with_connection do
+      cached_matches = Game.includes(:summoners).where(game_id: match_ids)
+    end
     cached_matches.each do |match|
       calculate_match(match, summoner, others)
     end
@@ -195,19 +200,30 @@ class MainController < ApplicationController
 
   def lookup_match(region, id, summoner, other_summoner_ids)
     puts "looking up match: #{id}"
-    match = Game.exists?(game_id: id) ? Game.includes(:summoners).find(game_id: id) : get_match(region, id)
-    return unless match
-    calculate_match(match, summoner, other_summoner_ids)
+    match = nil
+    ActiveRecord::Base.connection_pool.with_connection do
+      match = Game.includes(:summoners).find_by(game_id: id) if Game.exists?(game_id: id)
+    end
+    return calculate_match(match, summoner, other_summoner_ids) if match
+    @threads << Thread.new do
+      match = get_match(region, id)
+      return unless match
+      calculate_match(match, summoner, other_summoner_ids)
+    end
   end
 
   def calculate_match(match, summoner, other_summoner_ids)
     @number_of_games[summoner] += 1
-    match.summoners.each do |match_summoner|
+    summoners = nil
+    ActiveRecord::Base.connection_pool.with_connection do
+      summoners = match.summoners
+    end
+    summoners.each do |match_summoner|
       @groups[summoner][match_summoner] += 1 if other_summoner_ids.include?(match_summoner.summoner_id)
     end
-    unless match.summoners.count == 10 || match.summoners.count == 6
+    unless summoners.count == 10 || summoners.count == 6
       @errors << {message: "bad match not right number of summoners",
-                  summoners_count: match.summoners.count,
+                  summoners_count: summoners.count,
                   match: match}
     end
   end
@@ -237,28 +253,30 @@ class MainController < ApplicationController
       end
     end
     summoners = []
-    json["participantIdentities"].each do |participant|
-      participant = participant["player"]
-      summoner = Summoner.where(summoner_id: participant["summonerId"])[0]
-      if summoner
-        summoner.update(username: participant["summonerName"],
-                        stripped_username: participant["summonerName"].gsub(/\s+/, "").downcase)
-        summoners << summoner
-      else
-        summoners << Summoner.create(username: participant["summonerName"],
-                                     stripped_username: participant["summonerName"].gsub(/\s+/, "").downcase,
-                                     region: region, summoner_id: participant["summonerId"])
+    ActiveRecord::Base.connection_pool.with_connection do
+      json["participantIdentities"].each do |participant|
+        participant = participant["player"]
+        summoner = Summoner.where(summoner_id: participant["summonerId"])[0]
+        if summoner
+          summoner.update(username: participant["summonerName"],
+                          stripped_username: participant["summonerName"].gsub(/\s+/, "").downcase)
+          summoners << summoner
+        else
+          summoners << Summoner.create(username: participant["summonerName"],
+                                       stripped_username: participant["summonerName"].gsub(/\s+/, "").downcase,
+                                       region: region, summoner_id: participant["summonerId"])
+        end
+        # summoners << Summoner.find_or_create_by(username: participant["summonerName"],
+        #                                         stripped_username: participant["summonerName"].gsub(/\s+/, "").downcase,
+        #                                         region: region, summoner_id: participant["summonerId"])
       end
-      # summoners << Summoner.find_or_create_by(username: participant["summonerName"],
-      #                                         stripped_username: participant["summonerName"].gsub(/\s+/, "").downcase,
-      #                                         region: region, summoner_id: participant["summonerId"])
+      unless summoners.count == 10 || summoners.count == 6
+        @errors << {message: "bad match not right number of summoners",
+                    summoners_count: summoners.count,
+                    match: json["participantIdentities"]}
+      end
+      Game.create(game_id: id, summoners: summoners)
     end
-    unless summoners.count == 10 || summoners.count == 6
-      @errors << {message: "bad match not right number of summoners",
-                  summoners_count: summoners.count,
-                  match: json["participantIdentities"]}
-    end
-    Game.create(game_id: id, summoners: summoners)
   end
 end
 #TODO use action cable
