@@ -19,6 +19,7 @@ ActiveRecord::Schema.define(version: 20161129171229) do
     t.string   "game_id"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.index ["game_id"], name: "index_games_on_game_id", unique: true, using: :btree
   end
 
   create_table "games_summoners", id: false, force: :cascade do |t|

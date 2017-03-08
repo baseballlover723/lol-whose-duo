@@ -7,15 +7,47 @@ RANKED_QUEUES = ["RANKED_FLEX_SR", "RANKED_SOLO_5x5", "RANKED_TEAM_3x3", "RANKED
 KEY_SLEEP_TIME = (1.4 * NUMBER_OF_DUPLICATE_KEYS).seconds
 RETRY_SLEEP_TIME = 0.5
 KEYS = {}.with_indifferent_access
-REGION_TRANSLATOR.each_key do |region|
-  region_queue = Queue.new
-  NUMBER_OF_DUPLICATE_KEYS.times do
-    ENV["RIOT_API_KEYS"].split(" ").each do |key|
-      region_queue << key
+
+def setup
+  threads = []
+  keys = []
+  ENV["RIOT_API_KEYS"].split(" ").each do |key|
+    keys << key
+  end
+  ENV["UNSTABLE_RIOT_API_KEYS"].split(" ").each do |key|
+    keys << key
+  end
+
+  keys.each do |key|
+    threads << Thread.new do
+      region = "global"
+      path = "/api/lol/static-data/na/v1.2/versions"
+      uri = URI::HTTPS.build(host: region + REQUEST_BASE,
+                             path: path, query: {api_key: key}.to_query)
+      response = HTTParty.get(uri)
+      if response.code == 403
+        keys.delete key
+        print "key: '#{key}' is not valid\n"
+      else
+        print "key '#{key}' got a #{response.code}" if response.code != 200
+      end
     end
   end
-  KEYS[region] = region_queue
+  threads.each(&:join)
+
+  REGION_TRANSLATOR.each_key do |region|
+    region_queue = Queue.new
+    NUMBER_OF_DUPLICATE_KEYS.times do
+      keys.each do |key|
+        region_queue << key
+      end
+    end
+    KEYS[region] = region_queue
+  end
+  print "#{KEYS[:na].length} valid keys, #{keys.length} unique keys. Done verifiying keys\n"
 end
+
+setup
 
 class MainController < ApplicationController
   def index
@@ -28,6 +60,8 @@ class MainController < ApplicationController
   def lookup
     @threads = []
     @errors = []
+    @failed_api_keys = Hash.new(0)
+    @key_uses = Hash.new(0)
     @region = params.require(:region)
     @username = params.require(:username)
     @id = get_summoner_id @region, @username
@@ -63,18 +97,30 @@ class MainController < ApplicationController
     end
     @summoners.each do |summoner|
       other_ids = team_1_ids.include?(summoner.summoner_id) ? team_1_ids : team_2_ids
-      check_match_history(@region, summoner, other_ids.reject { |p| summoner.summoner_id == p })
+      @threads << Thread.new do
+        check_match_history(@region, summoner, other_ids.reject { |p| summoner.summoner_id == p })
+      end
     end
     @threads.each(&:join)
+
+    unless @failed_api_keys.empty?
+      percent_fail = {}
+      @failed_api_keys.each do |key, fails|
+        print "Fails #{key}: #{fails} / #{@key_uses[key]}\n"
+        percent_fail[key] = "#{fails} / #{@key_uses[key]}"
+      end
+      @errors << {failed_api_keys: percent_fail}
+    end
   end
 
   def get_key(region)
     key = KEYS[region].pop
-    puts "popped #{key} off of the #{region} queue, #{KEYS[region].size} keys left"
+    @key_uses[key] += 1
+    # print "popped #{key} off of the #{region} queue, #{KEYS[region].size} keys left\n"
     Thread.new do
       sleep KEY_SLEEP_TIME
       KEYS[region] << key
-      puts "readded key: #{key} to the #{region} queue, now #{KEYS[region].size} in queue"
+      # print "readded key: #{key} to the #{region} queue, now #{KEYS[region].size} in queue\n"
     end
     key
   end
@@ -85,7 +131,7 @@ class MainController < ApplicationController
 
     db_username = Summoner.where(region: region, stripped_username: username.gsub(/\s+/, "").downcase)[0]
     return db_username if db_username
-    puts "asking riot for region: #{region}, username: #{username}'s id"
+    print "asking riot for region: #{region}, username: #{username}'s id\n"
     key = get_key region
     id_uri = URI::HTTPS.build(host: region + REQUEST_BASE,
                               path: id_path1 + region + id_path2 + username.gsub(/\s+/, ""),
@@ -120,7 +166,6 @@ class MainController < ApplicationController
     end
 
     unless Game.exists?(game_id: json["gameId"])
-      puts "new current game"
       summoners = get_current_game_participants region, json
       Game.create(game_id: json["gameId"], summoners: summoners)
     end
@@ -145,13 +190,11 @@ class MainController < ApplicationController
   end
 
   def check_match_history(region, summoner, others, retrys = 0)
-    puts "#{summoner.summoner_id}: #{others}"
     matches = get_match_history(region, summoner)
     # return unless @errors.empty? && matches["endIndex"] != 0
     return if matches.code != 200 || matches["endIndex"] == 0
     old_matches = matches
     matches = matches["matches"]
-    puts "looking up matches: #{matches.map { |m| m["matchId"] }}"
     lookup_matches(region, matches, summoner, others)
   end
 
@@ -170,12 +213,13 @@ class MainController < ApplicationController
     json = HTTParty.get(match_history_uri)
     if json.code != 200
       if retrys < 7
-        puts "retrying match history #{{region: region, summoner: summoner.to_json}}"
+        print "retrying match history #{{region: region, summoner: summoner.to_json, key: key}}\n"
+        @failed_api_keys[key] += 1
         sleep(RETRY_SLEEP_TIME * retrys)
         return get_match_history(region, summoner, retrys + 1)
       else
-        puts "get match history failed: #{{region: region, summoner: summoner.to_json}}"
-        puts({json: json, key: key})
+        print "get match history failed: #{{region: region, summoner: summoner.to_json, key: key, json: json}}\n"
+        @failed_api_keys[key] += 1
         @errors << "error getting match history for summoner '#{summoner.username}'"
         return json
       end
@@ -185,9 +229,12 @@ class MainController < ApplicationController
 
   def lookup_matches(region, matches_json, summoner, others)
     match_ids = matches_json.map { |m| m["matchId"] }
+    # print "looking up matches: #{match_ids} ##{match_ids.length}\n"
+
     cached_matches = nil
     ActiveRecord::Base.connection_pool.with_connection do
       cached_matches = Game.includes(:summoners).where(game_id: match_ids)
+      cached_matches.inspect
     end
     cached_matches.each do |match|
       calculate_match(match, summoner, others)
@@ -199,10 +246,11 @@ class MainController < ApplicationController
   end
 
   def lookup_match(region, id, summoner, other_summoner_ids)
-    puts "looking up match: #{id}"
+    # print "looking up match: #{id}\n"
     match = nil
     ActiveRecord::Base.connection_pool.with_connection do
       match = Game.includes(:summoners).find_by(game_id: id) if Game.exists?(game_id: id)
+      match.inspect
     end
     return calculate_match(match, summoner, other_summoner_ids) if match
     @threads << Thread.new do
@@ -217,6 +265,7 @@ class MainController < ApplicationController
     summoners = nil
     ActiveRecord::Base.connection_pool.with_connection do
       summoners = match.summoners
+      summoners.inspect
     end
     summoners.each do |match_summoner|
       @groups[summoner][match_summoner] += 1 if other_summoner_ids.include?(match_summoner.summoner_id)
@@ -231,7 +280,7 @@ class MainController < ApplicationController
   # returns Game object
   def get_match(region, id, retrys = 0)
     if retrys == 0
-      puts "Getting match from riot"
+      # print "Getting match from riot\n"
     end
     match_path1 = "/api/lol/"
     match_path2 = "/v2.2/match/"
@@ -242,12 +291,13 @@ class MainController < ApplicationController
     json = HTTParty.get(match_uri)
     if json.code != 200
       if retrys < 3
-        puts "retrying match #{{region: region, id: id}}"
+        print "retrying match #{{region: region, id: id, key: key}}\n"
+        @failed_api_keys[key] += 1
         sleep(RETRY_SLEEP_TIME * retrys)
         return get_match(region, id, retrys + 1)
       else
-        puts "get match failed: #{{region: region, id: id}}"
-        puts({json: json, key: key})
+        print "get match failed: #{{region: region, id: id, key: key}}\n"
+        @failed_api_keys[key] += 1
         @errors << "There was an error retreiving match data {id: #{id}}"
         return false
       end
@@ -275,7 +325,11 @@ class MainController < ApplicationController
                     summoners_count: summoners.count,
                     match: json["participantIdentities"]}
       end
-      Game.create(game_id: id, summoners: summoners)
+      begin
+        Game.create(game_id: id, summoners: summoners)
+      rescue ActiveRecord::RecordNotUnique => e
+        Game.includes(:summoners).find_by(game_id: id)
+      end
     end
   end
 end
