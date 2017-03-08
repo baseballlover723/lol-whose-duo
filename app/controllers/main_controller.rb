@@ -62,6 +62,7 @@ class MainController < ApplicationController
     @threads = []
     @errors = []
     @progress_matches = 0
+    @total_matches = 0
     @last_progress = Time.now
     @failed_api_keys = Hash.new(0)
     @key_uses = Hash.new(0)
@@ -94,6 +95,8 @@ class MainController < ApplicationController
       team_1_ids << p["summonerId"].to_s if p["teamId"] == 100
       team_2_ids << p["summonerId"].to_s if p["teamId"] == 200
     end
+    @total_matches = @summoners.length * NUMBER_OF_HISTORY_GAMES
+
     @summoners.each do |summoner|
       @groups[summoner] = Hash.new(0)
       @number_of_games[summoner] = 0
@@ -168,7 +171,8 @@ class MainController < ApplicationController
       if retrys < 3
         return get_current_game region, summoner, retrys + 1
       end
-      @errors << "Error checking to see if '#{summoner.username}' is currently in a game. Try again a little bit."
+      print "Error checking to see if '#{summoner.username}' is currently in a game. Try again a little bit.\n#{json}\n"
+      @errors << "Error checking to see if '#{summoner.username}' is currently in a game. Try again a little bit. #{json}"
       return json
     end
 
@@ -200,8 +204,8 @@ class MainController < ApplicationController
     matches = get_match_history(region, summoner)
     # return unless @errors.empty? && matches["endIndex"] != 0
     return if matches.code != 200 || matches["endIndex"] == 0
-    old_matches = matches
     matches = matches["matches"]
+    @total_matches += matches.length - NUMBER_OF_HISTORY_GAMES unless matches.length == NUMBER_OF_HISTORY_GAMES
     lookup_matches(region, matches, summoner, others)
   end
 
@@ -289,8 +293,8 @@ class MainController < ApplicationController
     @progress_matches += 1
     if Time.now - @last_progress > 0.1
       @last_progress = Time.now
-      percent = 100 * @progress_matches / (@summoners.length * NUMBER_OF_HISTORY_GAMES)
-      STDOUT.write "\rcalculated matches: #{'%3.3s' % @progress_matches} / #{@summoners.length * NUMBER_OF_HISTORY_GAMES} (#{percent.round(2)}%)"
+      percent = 100 * @progress_matches / @total_matches
+      STDOUT.write "\rcalculated matches: #{'%3.3s' % @progress_matches} / #{@total_matches} (#{percent.round(2)}%)"
       $stdout.flush
     end
   end
