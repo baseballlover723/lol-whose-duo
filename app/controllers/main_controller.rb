@@ -18,6 +18,7 @@ def setup
     keys << key
   end
 
+  print "verifying #{keys.length} keys\n"
   keys.each do |key|
     threads << Thread.new do
       region = "global"
@@ -60,6 +61,8 @@ class MainController < ApplicationController
   def lookup
     @threads = []
     @errors = []
+    @progress_matches = 0
+    @last_progress = Time.now
     @failed_api_keys = Hash.new(0)
     @key_uses = Hash.new(0)
     @region = params.require(:region)
@@ -111,6 +114,10 @@ class MainController < ApplicationController
       end
       @errors << {failed_api_keys: percent_fail}
     end
+    @progress_matches -= 1
+    @last_progress = 0
+    print_progress
+    puts ""
   end
 
   def get_key(region)
@@ -261,6 +268,7 @@ class MainController < ApplicationController
   end
 
   def calculate_match(match, summoner, other_summoner_ids)
+    print_progress
     @number_of_games[summoner] += 1
     summoners = nil
     ActiveRecord::Base.connection_pool.with_connection do
@@ -274,6 +282,16 @@ class MainController < ApplicationController
       @errors << {message: "bad match not right number of summoners",
                   summoners_count: summoners.count,
                   match: match}
+    end
+  end
+
+  def print_progress
+    @progress_matches += 1
+    if Time.now - @last_progress > 0.1
+      @last_progress = Time.now
+      percent = 100 * @progress_matches / (@summoners.length * NUMBER_OF_HISTORY_GAMES)
+      STDOUT.write "\rcalculated matches: #{'%3.3s' % @progress_matches} / #{@summoners.length * NUMBER_OF_HISTORY_GAMES} (#{percent.round(2)}%)"
+      $stdout.flush
     end
   end
 
