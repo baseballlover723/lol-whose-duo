@@ -8,6 +8,15 @@ KEY_SLEEP_TIME = (1.4 * NUMBER_OF_DUPLICATE_KEYS).seconds
 RETRY_SLEEP_TIME = 0.5
 KEYS = {}.with_indifferent_access
 
+CHAMPIONS = {}
+
+# TODO only count as duo if on the same team
+# TODO split everything into 2 teams
+# game model
+# display
+# groups
+# need to check that duo is on the same team as summoner
+
 def setup
   threads = []
   keys = []
@@ -46,6 +55,26 @@ def setup
     KEYS[region] = region_queue
   end
   print "#{KEYS[:na].length} valid keys, #{keys.length} unique keys. Done verifiying keys\n"
+
+  populate_champions(keys.first)
+end
+
+def populate_champions(key)
+  print "loading champion data\n"
+  region = "global"
+  path = "/api/lol/static-data/na/v1.2/champion"
+  uri = URI::HTTPS.build(host: region + REQUEST_BASE,
+                         path: path, query: {champData: "image", api_key: key}.to_query)
+  response = HTTParty.get(uri)
+  response["data"].each do |key, champion_data|
+    image_data = champion_data["image"]
+    champion = Champion.find_or_create_by(id: champion_data["id"], name: champion_data["name"], title: champion_data["title"],
+                                          full_image_url: image_data["full"], sprite_image_url: image_data["sprite"],
+                                          group_image_url: image_data["group"])
+    CHAMPIONS[champion.id] = champion
+  end
+  CHAMPIONS.inspect
+  print "Done loading champion data\n"
 end
 
 setup
@@ -66,11 +95,15 @@ class MainController < ApplicationController
     @last_progress = Time.now
     @failed_api_keys = Hash.new(0)
     @key_uses = Hash.new(0)
+    @summoner_champions = {}
+
     @region = params.require(:region)
     @username = params.require(:username)
+
     @id = get_summoner_id @region, @username
     @groups = {}
     @number_of_games = {}
+    @sets = []
     return unless @errors.empty?
 
     gon.id = @id.summoner_id
@@ -117,10 +150,31 @@ class MainController < ApplicationController
       end
       @errors << {failed_api_keys: percent_fail}
     end
+
+    @groups.each do |(current, duo)|
+      unless duo.empty?
+        set = get_set current, duo.keys
+        set << current
+        duo.each do |summoner, number_of_matches|
+          # puts summoner.inspect
+          set << summoner
+        end
+      end
+    end
+
     @progress_matches -= 1
     @last_progress = 0
     print_progress
     puts ""
+  end
+
+  def get_set(summoner, duo)
+    @sets.each do |set|
+      return set if set.include?(summoner) || !(set & duo).empty?
+    end
+    set = Set.new
+    @sets << set
+    set
   end
 
   def get_key(region)
@@ -190,12 +244,13 @@ class MainController < ApplicationController
       if summoner
         summoner.update(username: participant["summonerName"],
                         stripped_username: participant["summonerName"].gsub(/\s+/, "").downcase)
-        summoners << summoner
       else
-        summoners << Summoner.create(username: participant["summonerName"],
-                                     stripped_username: participant["summonerName"].gsub(/\s+/, "").downcase,
-                                     region: region, summoner_id: participant["summonerId"])
+        summoner = Summoner.create(username: participant["summonerName"],
+                                   stripped_username: participant["summonerName"].gsub(/\s+/, "").downcase,
+                                   region: region, summoner_id: participant["summonerId"])
       end
+      summoners << summoner
+      @summoner_champions[summoner] = CHAMPIONS[participant["championId"]]
     end
     summoners
   end
@@ -203,7 +258,7 @@ class MainController < ApplicationController
   def check_match_history(region, summoner, others, retrys = 0)
     matches = get_match_history(region, summoner)
     # return unless @errors.empty? && matches["endIndex"] != 0
-    return if matches.code != 200 || matches["endIndex"] == 0
+    return @total_matches -= NUMBER_OF_HISTORY_GAMES if matches.code != 200 || matches["endIndex"] == 0
     matches = matches["matches"]
     @total_matches += matches.length - NUMBER_OF_HISTORY_GAMES unless matches.length == NUMBER_OF_HISTORY_GAMES
     lookup_matches(region, matches, summoner, others)
@@ -224,12 +279,12 @@ class MainController < ApplicationController
     json = HTTParty.get(match_history_uri)
     if json.code != 200
       if retrys < 7
-        print "retrying match history #{{region: region, summoner: summoner.to_json, key: key}}\n"
+        print "retrying match history #{{region: region, summoner: summoner.to_json, key: key, code: json.code}}\n"
         @failed_api_keys[key] += 1
         sleep(RETRY_SLEEP_TIME * retrys)
         return get_match_history(region, summoner, retrys + 1)
       else
-        print "get match history failed: #{{region: region, summoner: summoner.to_json, key: key, json: json}}\n"
+        print "get match history failed: #{{region: region, summoner: summoner.to_json, key: key, code: json.code}}\n"
         @failed_api_keys[key] += 1
         @errors << "error getting match history for summoner '#{summoner.username}'"
         return json
@@ -266,7 +321,7 @@ class MainController < ApplicationController
     return calculate_match(match, summoner, other_summoner_ids) if match
     @threads << Thread.new do
       match = get_match(region, id)
-      return unless match
+      next unless match
       calculate_match(match, summoner, other_summoner_ids)
     end
   end
@@ -300,6 +355,7 @@ class MainController < ApplicationController
   end
 
   # returns Game object
+  # TODO fix so that it only checks if they're on the same team and not just in the same game
   def get_match(region, id, retrys = 0)
     if retrys == 0
       # print "Getting match from riot\n"
@@ -313,12 +369,12 @@ class MainController < ApplicationController
     json = HTTParty.get(match_uri)
     if json.code != 200
       if retrys < 3
-        print "retrying match #{{region: region, id: id, key: key}}\n"
+        print "retrying match #{{region: region, id: id, key: key, code: json.code}}\n"
         @failed_api_keys[key] += 1
         sleep(RETRY_SLEEP_TIME * retrys)
         return get_match(region, id, retrys + 1)
       else
-        print "get match failed: #{{region: region, id: id, key: key}}\n"
+        print "get match failed: #{{region: region, id: id, key: key, code: json.code}}\n"
         @failed_api_keys[key] += 1
         @errors << "There was an error retreiving match data {id: #{id}}"
         return false

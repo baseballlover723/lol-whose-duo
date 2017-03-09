@@ -9,9 +9,9 @@
       <% if index == @groups.size / 2 %>
           <br/>
       <% end %>
-      <%= current.username %> has played with :
+      <%= raw summoner_name current, @summoner_champions %> has played with :
       <% duo.each do |summoner, number_of_matches| %>
-          {<%= summoner.username %>: <%= number_of_matches %> / <%= @number_of_games[current] %> matches
+          <%= raw summoner_name summoner, @summoner_champions %>: <%= number_of_matches %> / <%= @number_of_games[current] %> matches
           (<%= (100 * number_of_matches / @number_of_games[current].to_f).round(0) %>)%},
       <% end %>
       (looked at the last <%= @number_of_games[current] %> ranked games)<br/>
@@ -20,6 +20,11 @@
 <p>Errors: <%= @errors %></p>
 <p>Groups: <br/>
 <div id="groups">
+  <% @sets.each do |set| %>
+    <p>
+      [<%= raw set.map{|summoner| summoner_name summoner, @summoner_champions}.join(", ") %>]
+    </p>
+<% end %>
   <% @groups.each_with_index do |(current, duo), index| %>
   <% end %>
 </div>
