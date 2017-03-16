@@ -39,11 +39,14 @@ def setup
         keys.delete key
         print "key: '#{key}' is not valid\n"
       else
-        print "key '#{key}' got a #{response.code}" if response.code != 200
+        # keys.delete key
+        print "key '#{key}' got a #{response.code}\n" if response.code != 200
       end
     end
   end
   threads.each(&:join)
+
+  puts "No Valid Keys" or exit(-1) if keys.empty?
 
   REGION_TRANSLATOR.each_key do |region|
     region_queue = Queue.new
@@ -66,6 +69,13 @@ def populate_champions(key)
   uri = URI::HTTPS.build(host: region + REQUEST_BASE,
                          path: path, query: {champData: "image", api_key: key}.to_query)
   response = HTTParty.get(uri)
+  unless response.code == 200
+    Champion.all.each do |c|
+      CHAMPIONS[c.id] = c
+    end
+    puts "Error getting champion data. Loaded #{CHAMPIONS.size} champions from database"
+    return false
+  end
   response["data"].each do |key, champion_data|
     image_data = champion_data["image"]
     champion = Champion.find_or_create_by(id: champion_data["id"], name: champion_data["name"], title: champion_data["title"],
